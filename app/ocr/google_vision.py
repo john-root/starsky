@@ -1,13 +1,18 @@
 import logging
 import string
+import pickle
+from urllib import quote_plus
 from xml.sax.saxutils import escape
 try:
     from StringIO import StringIO
 except ImportError:
     from io import StringIO
 from google.cloud import vision
+from google.cloud.vision import types
 import os
 from jinja2 import Environment, FileSystemLoader
+import gvision_settings as settings
+import aws
 
 NEW_LINE_HYSTERESIS = 4
 TEMPLATE_ENVIRONMENT = Environment(
@@ -28,13 +33,19 @@ def ocr_image(image_uri, ocr_hints):
     # TODO : revisit - update for max vs full?
     full_image = ''.join([image_uri, '/full/full/0/default.jpg'])
 
-    vision_client = vision.Client()
-    image = vision_client.image(source_uri=full_image)
-    texts = image.detect_full_text()
+    client = vision.ImageAnnotatorClient()
+    image = types.Image()
+    image.source.image_uri = full_image
+    response = client.document_text_detection(image=image)
+    texts = response.full_text_annotation
 
-    if len(texts.pages) == 0:
+    if not hasattr(texts, 'pages') or len(texts.pages) == 0:
         logging.debug("No pages returned from Vision API")
-    # logging.debug(vars(texts))
+
+    if hasattr(settings, 'RAW_OCR_BUCKET') and settings.RAW_OCR_BUCKET is not None:
+        pickled_texts = pickle.dumps(texts, pickle.HIGHEST_PROTOCOL)
+        s3 = aws.get_s3_resource()
+        aws.put_s3_object(s3, settings.RAW_OCR_BUCKET, quote_plus(image_uri), pickled_texts)
 
     source_page = texts.pages[0]
     page = {
